@@ -78,7 +78,6 @@ WinMain(
 {
     WNDCLASS WindowClass = {};      // This is all about the game window itself
 
-    WindowClass.style = CS_OWNDC|CS_HREDRAW|CS_VREDRAW;   // UINT (unsigned 32-bit); window properties
     WindowClass.lpfnWndProc = MainWindowCallback;     // Pointer to a function; window events
     WindowClass.hInstance = Instance;  // if !WinMain, set to GetModuleHandle(0)
 //  WindowClass.hIcon;
@@ -107,11 +106,11 @@ WinMain(
             MSG Message;
             for(;;)
             {
-                BOOL MessageResult = GetMessage(&Message, 0, 0, 0);
+                BOOL MessageResult = GetMessageA(&Message, 0, 0, 0);
                 if(MessageResult > 0)
                 {
                     TranslateMessage(&Message);
-                    DispatchMessage(&Message);
+                    DispatchMessageA(&Message);
                 }
                 else
                 {
