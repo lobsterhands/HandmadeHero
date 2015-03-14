@@ -7,61 +7,88 @@
 */
 
 #include <windows.h>
+#include <stdint.h>
 
 // Lyle: these are for building; will be changed later
 #define internal static             // local to specific source file
 #define local_persist static
 #define global_variable static
 
+typedef int8_t  int8;
+typedef int16_t int16;
+typedef int32_t int32;
+typedef int64_t int64;
+
+typedef uint8_t  uint8;
+typedef uint16_t uint16;
+typedef uint32_t uint32;
+typedef uint64_t uint64;
+
 // Lyle: This is a static global (global for now)
 global_variable bool Running;
 
 global_variable BITMAPINFO BitmapInfo;
 global_variable void *BitmapMemory;
-global_variable HBITMAP BitmapHandle;
-global_variable HDC BitmapDeviceContext;
+global_variable int BitmapWidth;
+global_variable int BitmapHeight;
+global_variable int BytesPerPixel = 4;
+
+internal void
+RenderWeirdGradient(int XOffset, int YOffset)
+{
+    int Width = BitmapWidth;
+    int Height = BitmapHeight;
+
+    int Pitch = Width*BytesPerPixel;
+    uint8 *Row = (uint8 *)BitmapMemory;
+    for (int Y = 0; Y < BitmapHeight; ++Y) // Casey does a ++Y here; why?
+    {
+        uint32 *Pixel = (uint32 *)Row;
+        for (int X = 0; X < BitmapWidth; ++X)
+        {
+            uint8 Blue = (X + XOffset);
+            uint8 Green = (Y + YOffset);
+
+            *Pixel++ = ((Green << 8) | Blue);
+        }  
+
+        Row += Pitch;
+    }
+}
 
 internal void
 Win32ResizeDIBSection(int Width, int Height)         // Windows bitmap display
 {
     // Lyle: Maybe don't free first; free after then free first if that fails
-    if(BitmapHandle)
+    if(BitmapMemory)
     {
-        DeleteObject(BitmapHandle);
-    }
-    
-    if(!BitmapDeviceContext)
-    {
-        // Lyle: should we recreate these under certain circumstances?
-        BitmapDeviceContext = CreateCompatibleDC(0);
+        VirtualFree(BitmapMemory, 0, MEM_RELEASE);
     }
 
+    BitmapWidth = Width;
+    BitmapHeight = Height;
+
     BitmapInfo.bmiHeader.biSize = sizeof(BitmapInfo.bmiHeader);
-    BitmapInfo.bmiHeader.biWidth = Width;
-    BitmapInfo.bmiHeader.biHeight = Height;
+    BitmapInfo.bmiHeader.biWidth = BitmapWidth;
+    BitmapInfo.bmiHeader.biHeight = -BitmapHeight;  // Neg biHeight = top-down DIB
     BitmapInfo.bmiHeader.biPlanes = 1;
     BitmapInfo.bmiHeader.biBitCount = 32;
     BitmapInfo.bmiHeader.biCompression = BI_RGB;
-    // BitmapInfo.biSizeImage = 0;          // Lyle: These are cleared for free 
-    // BitmapInfo.biXPelsPerMeter = 0;      // when BitmapInfo is initialized; 
-    // BitmapInfo.biYPelsPerMeter = 0;      // remove this code/note
-    // BitmapInfo.biClrUsed = 0;
-    // BitmapInfo.biClrImportant = 0;
 
-    // Lyle: Maybe we can just allocate this ourselves
-    BitmapHandle = CreateDIBSection(
-        BitmapDeviceContext, &BitmapInfo,
-        DIB_RGB_COLORS,
-        &BitmapMemory,
-        0, 0);
+    int BitmapMemorySize = (BitmapWidth * BitmapHeight) *  BytesPerPixel;
+    BitmapMemory = VirtualAlloc(0, BitmapMemorySize, MEM_COMMIT, PAGE_READWRITE);
+
+    // TODO(Lyle): Probably clear this to black
 }
 
 internal void
-Win32UpdateWindow(HDC DeviceContext, int X, int Y, int Width, int Height)
+Win32UpdateWindow(HDC DeviceContext, RECT *ClientRect, int X, int Y, int Width, int Height)
 {
+    int WindowWidth = ClientRect->right - ClientRect->left;
+    int WindowHeight = ClientRect->bottom - ClientRect->top;
     StretchDIBits(DeviceContext,
-                  X, Y, Width, Height,    // Destination
-                  X, Y, Width, Height,    // Source
+                  0, 0, BitmapWidth, BitmapHeight,  // Destination
+                  0, 0, WindowWidth, WindowHeight,  // Source
                   BitmapMemory,
                   &BitmapInfo,
                   DIB_RGB_COLORS, SRCCOPY);   // MSDN for info
@@ -112,7 +139,9 @@ Win32MainWindowCallback(HWND Window,      // Function originally: WindowProc
             int Y = Paint.rcPaint.top;
             int Width = Paint.rcPaint.right - Paint.rcPaint.left;
             int Height = Paint.rcPaint.bottom - Paint.rcPaint.top;
-            Win32UpdateWindow(DeviceContext, X, Y, Width, Height);
+            RECT ClientRect;
+            GetClientRect(Window, &ClientRect);
+            Win32UpdateWindow(DeviceContext, &ClientRect, X, Y, Width, Height);
             EndPaint(Window, &Paint);
         } break;
 
@@ -144,7 +173,7 @@ WinMain(
 
     if(RegisterClassA(&WindowClass))
     {
-        HWND WindowHandle = 
+        HWND Window = 
         CreateWindowEx(
             0,      // DWORD dwExStyle; no need here
             WindowClass.lpszClassName,       // LPCTSTR lpClassName,
@@ -158,22 +187,35 @@ WinMain(
             0,                              // HMENU hMenu,
             Instance,                       // HINSTANCE hInstance,
             0);                             // LPVOID lpParam
-        if(WindowHandle)
+        if(Window)
         {
             Running = true;
+            int XOffset = 0;
+            int YOffset = 0;
             while(Running)
             {
                 MSG Message;
-                BOOL MessageResult = GetMessageA(&Message, 0, 0, 0);
-                if(MessageResult > 0)
+                while(PeekMessage(&Message, 0, 0, 0, PM_REMOVE))
                 {
+                    if(Message.message == WM_QUIT)
+                    {
+                        Running = false;
+                    }
+
                     TranslateMessage(&Message);
                     DispatchMessageA(&Message);
                 }
-                else
-                {
-                    break;
-                }
+                RenderWeirdGradient(XOffset, YOffset);
+                
+                HDC DeviceContext = GetDC(Window);
+                RECT ClientRect;
+                GetClientRect(Window, &ClientRect);
+                int WindowWidth = ClientRect.right - ClientRect.left;
+                int WindowHeight = ClientRect.bottom - ClientRect.top;
+                Win32UpdateWindow(DeviceContext, &ClientRect, 0, 0, WindowWidth, WindowHeight);
+                ReleaseDC(Window, DeviceContext);
+
+                ++XOffset;
             }
         }
         else
